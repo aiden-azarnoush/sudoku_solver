@@ -1,12 +1,54 @@
 # Sudoku Solver
 
-This repository contains a Python implementation of a Sudoku solver. The original code was written in Pascal and has been converted to Python. The solver uses a combination of constraint propagation and backtracking to efficiently solve Sudoku puzzles.
+A Python Sudoku solver using **constraint propagation + backtracking**, with
+both a command-line interface and a **graphical interface** where you can type
+in a puzzle or load one from a file, and get the solution back as text and as
+an image.
 
-## Usage
+Originally written in Pascal in 2010 at Sharif University of Technology,
+converted to Python in 2024.
 
-To use this solver, you need to create a text file called `sudoku.txt` that contains an unsolved Sudoku puzzle where 0 is used for empty cells. Below is an example of the format:
+<p align="center">
+<img src="figures/solving.gif" width="340" alt="Solver filling in the grid">
+</p>
 
-```text
+## Example
+
+| Puzzle | Solution |
+|---|---|
+| ![puzzle](figures/puzzle.png) | ![solution](figures/solution.png) |
+
+Clues are black; digits found by the solver are blue. Solving the classic
+puzzle above takes 1,959 place/backtrack steps to settle the 51 empty cells —
+the animation replays the 51 placements that survive.
+
+## Two ways to use it
+
+### 1. Graphical interface
+
+```bash
+python sudoku_gui.py
+```
+
+- **Type the clues** directly into the grid, leaving unknown cells empty, or
+  click **Load puzzle…** to browse for a puzzle text file.
+- Click **Solve**. The app automatically writes the puzzle to `puzzle.txt`,
+  solves it, fills the grid (solved digits in blue), and saves the result as
+  both `solution.txt` and `solution.png`.
+- Invalid input is caught up front: non-digits are rejected as you type, and
+  conflicting clues (e.g. two 5s in one row) produce a clear error message
+  instead of a doomed solve.
+
+The GUI uses tkinter, which ships with the standard Python installers on
+macOS and Windows (on some Linux distributions: `sudo apt install python3-tk`).
+The PNG output needs matplotlib; without it, the text outputs still work.
+
+### 2. Command line
+
+Create a text file containing the unsolved puzzle, one row per line, `0` for
+empty cells:
+
+```
 5 3 0 0 7 0 0 0 0
 6 0 0 1 9 5 0 0 0
 0 9 8 0 0 0 0 6 0
@@ -18,42 +60,62 @@ To use this solver, you need to create a text file called `sudoku.txt` that cont
 0 0 0 0 8 0 0 7 9
 ```
 
-The code will read the puzzle, solve it, and print the solved puzzle. If the puzzle does not have any solutions, it will indicate that no solution exists.
+(the compact `530070000` one-string-per-row format is also accepted), then:
 
-## Methods Used
-Constraint Propagation
-The solver uses sets to keep track of available numbers for each row, column, and block. This allows the algorithm to quickly check if a number can be placed in a cell.
+```bash
+python sudoku_solver.py sudoku.txt
+```
 
-- Rows, Columns, and Blocks Sets: Each of these sets contains the numbers that can still be placed in the respective row, column, or 3x3 block.
-- Initialization: When the puzzle is loaded, the sets are updated to remove the numbers that are already placed in the puzzle.
+which prints the solution and writes `solution.txt` and `solution.png`. If
+the puzzle has no solution, it says so.
 
-## Backtracking
-
-The solver employs a backtracking algorithm to try placing numbers in empty cells and revert changes if a conflict is found.
-
-- Recursive Solving: The solve method is called recursively. It tries to place a number in an empty cell, checks if the placement is valid, and then moves on to the next empty cell.
-- Heuristic: The solver selects the next empty cell and tries to fill it with a valid number from 1 to 9. If a valid placement is found, it proceeds to the next cell. If no valid number can be placed, it backtracks to the previous cell and tries the next number.
-
-## Methods in the Solver
-
-- `get_block_index`: Calculates the index of the 3x3 block for a given cell.
-- `load_sudoku`: Reads the Sudoku puzzle from a file and initializes the board and tracking sets.
-- `is_valid`: Checks if placing a number in a given cell is valid according to Sudoku rules.
-- `place_number`: Places a number in a cell and updates the tracking sets.
-- `remove_number`: Removes a number from a cell and updates the tracking sets.
-- `solve`: Implements the backtracking algorithm to solve the puzzle.
-- `print_sudoku`: Prints the Sudoku board.
-
-## Example
-To run the solver, ensure you have `sudoku.txt` in the same directory as your Python script. Here is how you can run it:
+Or use the class directly:
 
 ```python
+from sudoku_solver import SudokuSolver
+
 solver = SudokuSolver()
-solver.load_sudoku('sudoku.txt')
+solver.load_sudoku('sudoku.txt')      # or solver.load_from_array(grid)
 if solver.solve():
     solver.print_sudoku()
+    solver.save_sudoku('solution.txt')
+    solver.render('solution.png')
 else:
     print("No solution exists")
 ```
-## Conclusion
-This Sudoku solver efficiently solves puzzles using a combination of constraint propagation and backtracking. It reads puzzles from a text file, solves them, and prints the solution or indicates if no solution exists. The solver is designed to handle standard 9x9 Sudoku puzzles.
+
+## How it works
+
+**Constraint propagation.** Three arrays of sets track which digits are still
+available in each row, column, and 3×3 block. A placement is legal exactly
+when the digit is present in all three sets, so validity checks are O(1) set
+membership instead of scanning the board.
+
+- `rows[i]`, `cols[j]`, `blocks[b]` start as {1…9} and shrink as clues load.
+- `get_block_index(row, col)` maps a cell to its 3×3 block: `(row // 3) * 3 + (col // 3)`.
+
+**Backtracking.** `solve()` takes the next empty cell, tries each digit that
+survives the set check, recurses, and undoes the placement if the branch dies:
+
+- `place_number` / `remove_number` keep the three set families exactly in
+  sync with the board, so the state after a backtrack is identical to the
+  state before the attempt.
+- When a cell has no legal digit, it is pushed back onto the empty list and
+  the previous cell tries its next candidate.
+
+The combination is what makes it fast: propagation prunes most candidates
+before the recursion ever tries them, and backtracking guarantees
+completeness — if a solution exists, it will be found.
+
+## Files
+
+```
+sudoku_solver.py    solver class + command-line interface
+sudoku_gui.py       tkinter GUI (grid entry, file browse, PNG/TXT output)
+sudoku.txt          example puzzle
+figures/            images used in this README
+```
+
+## License
+
+MIT — see [LICENSE](LICENSE).

@@ -1,0 +1,241 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width, initial-scale=1">
+<title>Sudoku Solver</title>
+<style>
+  :root {
+    --ink: #1c2733; --muted: #66768a; --line: #9aa7b5; --thick: #1c2733;
+    --sel: #fff3a8; --clue: #1c2733; --solved: #1a8f4a; --err: #b00020;
+    --btn: #1f5fbf; --btn2: #e9eef5;
+  }
+  * { box-sizing: border-box; }
+  body { margin: 0; padding: 24px 12px; font-family: -apple-system, "Segoe UI", Helvetica, Arial, sans-serif;
+         color: var(--ink); background: #f6f8fb; }
+  h1 { text-align: center; font-size: 1.5rem; margin: 0 0 4px; }
+  .sub { text-align: center; color: var(--muted); font-size: .9rem; margin-bottom: 20px; }
+  .layout { display: flex; justify-content: center; align-items: flex-start; gap: 22px; flex-wrap: wrap; }
+  .side { width: 200px; display: flex; flex-direction: column; gap: 10px; }
+  button { font-size: 1rem; padding: 10px 14px; border-radius: 8px; border: 1px solid #c9d4e0;
+           background: var(--btn2); color: var(--ink); cursor: pointer; }
+  button.primary { background: var(--btn); color: #fff; border-color: var(--btn); font-weight: 600; }
+  button.done { background: #1a8f4a; border-color: #1a8f4a; color: #fff; font-weight: 600; }
+  button:disabled { opacity: .45; cursor: default; }
+  .grid { display: grid; grid-template-columns: repeat(9, 46px); grid-template-rows: repeat(9, 46px);
+          border: 3px solid var(--thick); background: #fff; user-select: none; }
+  .cell { display: flex; align-items: center; justify-content: center; font-size: 1.35rem;
+          border-right: 1px solid var(--line); border-bottom: 1px solid var(--line); color: var(--clue);
+          font-weight: 600; }
+  .cell:nth-child(3n) { border-right: 2px solid var(--thick); }
+  .cell:nth-child(9n) { border-right: none; }
+  .cell.row3 { border-bottom: 2px solid var(--thick); }
+  .cell.row9 { border-bottom: none; }
+  .grid.editing .cell { cursor: pointer; }
+  .cell.selected { background: var(--sel); }
+  .cell.solved { color: var(--solved); font-weight: 400; }
+  .cell.conflict { background: #ffd9d9; }
+  .keypad { display: grid; grid-template-columns: repeat(3, 1fr); gap: 6px; }
+  .keypad button { padding: 12px 0; font-size: 1.15rem; }
+  .keypad .wide { grid-column: span 3; font-size: .95rem; }
+  .msg { min-height: 3.2em; font-size: .95rem; line-height: 1.35; }
+  .msg.error { color: var(--err); font-weight: 600; }
+  .msg.ok { color: var(--solved); font-weight: 600; }
+  .hint { color: var(--muted); font-size: .82rem; line-height: 1.4; }
+  .foot { text-align: center; color: var(--muted); font-size: .8rem; margin-top: 26px; }
+  .foot a { color: var(--btn); }
+  @media (max-width: 720px) {
+    .layout { flex-direction: column; align-items: center; }
+    .side { width: 300px; }
+  }
+</style>
+</head>
+<body>
+<h1>Sudoku Solver</h1>
+<div class="sub">Enter the clues, press Solve. Backtracking with constraint propagation, in your browser.</div>
+
+<div class="layout">
+  <div class="side">
+    <button id="edit" class="primary">Edit</button>
+    <div class="keypad" id="keypad">
+      <button data-k="1">1</button><button data-k="2">2</button><button data-k="3">3</button>
+      <button data-k="4">4</button><button data-k="5">5</button><button data-k="6">6</button>
+      <button data-k="7">7</button><button data-k="8">8</button><button data-k="9">9</button>
+      <button data-k="0" class="wide">⌫ clear cell</button>
+    </div>
+    <div class="hint">Click a cell, then tap a key here or type on your keyboard.
+      Arrow keys move between cells; Backspace clears.</div>
+    <button id="example">Load example</button>
+    <button id="clear">Clear grid</button>
+  </div>
+
+  <div class="grid" id="grid" tabindex="0" aria-label="Sudoku grid"></div>
+
+  <div class="side">
+    <button id="solve" class="primary">Solve</button>
+    <div class="msg" id="msg"></div>
+    <div class="hint">Clues are black; the solution appears in green.
+      A puzzle needs at least 17 clues to have a unique solution.</div>
+  </div>
+</div>
+
+<div class="foot">
+  Source, Python CLI and desktop version:
+  <a href="https://github.com/aiden-azarnoush/sudoku_solver">github.com/aiden-azarnoush/sudoku_solver</a>
+</div>
+
+<script>
+// ---------------------------------------------------------------- state
+const grid = document.getElementById('grid');
+const msg = document.getElementById('msg');
+const editBtn = document.getElementById('edit');
+const solveBtn = document.getElementById('solve');
+const cells = [];
+let board = Array.from({length: 9}, () => Array(9).fill(0));   // clues
+let editing = false;
+let sel = null;                                                  // [r, c]
+
+for (let r = 0; r < 9; r++) for (let c = 0; c < 9; c++) {
+  const d = document.createElement('div');
+  d.className = 'cell' + ((r + 1) % 3 === 0 ? ' row3' : '') + (r === 8 ? ' row9' : '');
+  d.addEventListener('click', () => { if (editing) select(r, c); });
+  grid.appendChild(d); cells.push(d);
+}
+
+function cell(r, c) { return cells[r * 9 + c]; }
+function select(r, c) {
+  if (sel) cell(...sel).classList.remove('selected');
+  sel = [r, c]; cell(r, c).classList.add('selected'); grid.focus();
+}
+function setMsg(text, cls) { msg.textContent = text; msg.className = 'msg ' + (cls || ''); }
+function render(solution) {
+  for (let r = 0; r < 9; r++) for (let c = 0; c < 9; c++) {
+    const d = cell(r, c);
+    d.classList.remove('solved', 'conflict');
+    if (board[r][c]) { d.textContent = board[r][c]; }
+    else if (solution) { d.textContent = solution[r][c]; d.classList.add('solved'); }
+    else d.textContent = '';
+  }
+}
+function setValue(v) {
+  if (!editing || !sel) return;
+  board[sel[0]][sel[1]] = v; render(); setMsg('');
+}
+
+// ---------------------------------------------------------------- editing
+editBtn.addEventListener('click', () => {
+  editing = !editing;
+  grid.classList.toggle('editing', editing);
+  editBtn.textContent = editing ? 'Done' : 'Edit';
+  editBtn.className = editing ? 'done' : 'primary';
+  solveBtn.disabled = editing;
+  if (editing) { render(); setMsg('Editing: click a cell and enter its digit.'); select(sel ? sel[0] : 0, sel ? sel[1] : 0); }
+  else { if (sel) cell(...sel).classList.remove('selected'); sel = null; setMsg(''); }
+});
+document.getElementById('keypad').addEventListener('click', e => {
+  const b = e.target.closest('button'); if (b) setValue(+b.dataset.k);
+});
+grid.addEventListener('keydown', e => {
+  if (!editing || !sel) return;
+  let [r, c] = sel;
+  if (/^[1-9]$/.test(e.key)) setValue(+e.key);
+  else if (['Backspace', 'Delete', '0'].includes(e.key)) setValue(0);
+  else if (e.key === 'ArrowUp') select((r + 8) % 9, c);
+  else if (e.key === 'ArrowDown') select((r + 1) % 9, c);
+  else if (e.key === 'ArrowLeft') select(r, (c + 8) % 9);
+  else if (e.key === 'ArrowRight') select(r, (c + 1) % 9);
+  else if (e.key === 'Tab') { const nr = c === 8 ? (r + 1) % 9 : r; select(nr, (c + 1) % 9); }
+  else return;
+  e.preventDefault();
+});
+document.getElementById('clear').addEventListener('click', () => {
+  board = Array.from({length: 9}, () => Array(9).fill(0)); render(); setMsg('');
+});
+document.getElementById('example').addEventListener('click', () => {
+  const ex = ['530070000','600195000','098000060','800060003','400803001',
+              '700020006','060000280','000419005','000080079'];
+  board = ex.map(row => [...row].map(Number)); render(); setMsg('Example loaded. Press Solve.');
+});
+
+// ---------------------------------------------------------------- solver
+// Sets of available digits per row / column / 3x3 block; backtracking over
+// empty cells. count(limit) returns the number of solutions up to `limit`,
+// which lets us distinguish "no solution", "unique", "not enough clues".
+function conflicts(b) {
+  const bad = [];
+  for (let r = 0; r < 9; r++) for (let c = 0; c < 9; c++) {
+    const v = b[r][c]; if (!v) continue;
+    for (let k = 0; k < 9; k++) {
+      if (k !== c && b[r][k] === v) bad.push([r, c]);
+      if (k !== r && b[k][c] === v) bad.push([r, c]);
+    }
+    const r0 = r - r % 3, c0 = c - c % 3;
+    for (let i = r0; i < r0 + 3; i++) for (let j = c0; j < c0 + 3; j++)
+      if ((i !== r || j !== c) && b[i][j] === v) bad.push([r, c]);
+  }
+  return bad;
+}
+
+function solve(b, limit) {
+  const rows = Array.from({length: 9}, () => new Set([1,2,3,4,5,6,7,8,9]));
+  const cols = Array.from({length: 9}, () => new Set([1,2,3,4,5,6,7,8,9]));
+  const blks = Array.from({length: 9}, () => new Set([1,2,3,4,5,6,7,8,9]));
+  const blk = (r, c) => Math.floor(r / 3) * 3 + Math.floor(c / 3);
+  const g = b.map(row => row.slice());
+  const empty = [];
+  for (let r = 0; r < 9; r++) for (let c = 0; c < 9; c++) {
+    const v = g[r][c];
+    if (v) { rows[r].delete(v); cols[c].delete(v); blks[blk(r, c)].delete(v); }
+    else empty.push([r, c]);
+  }
+  let found = 0, first = null;
+  function rec(i) {
+    if (i === empty.length) { found++; if (!first) first = g.map(x => x.slice()); return found >= limit; }
+    // most-constrained cell first: fewer branches
+    let best = i, bestN = 10;
+    for (let k = i; k < empty.length; k++) {
+      const [r, c] = empty[k]; let n = 0;
+      for (const v of rows[r]) if (cols[c].has(v) && blks[blk(r, c)].has(v)) n++;
+      if (n < bestN) { bestN = n; best = k; if (n === 0) break; }
+    }
+    [empty[i], empty[best]] = [empty[best], empty[i]];
+    const [r, c] = empty[i], B = blk(r, c);
+    for (const v of [...rows[r]]) {
+      if (!cols[c].has(v) || !blks[B].has(v)) continue;
+      g[r][c] = v; rows[r].delete(v); cols[c].delete(v); blks[B].delete(v);
+      const stop = rec(i + 1);
+      g[r][c] = 0; rows[r].add(v); cols[c].add(v); blks[B].add(v);
+      if (stop) return true;
+    }
+    return false;
+  }
+  rec(0);
+  return {count: found, solution: first};
+}
+
+solveBtn.addEventListener('click', () => {
+  render();
+  const bad = conflicts(board);
+  if (bad.length) {
+    bad.forEach(([r, c]) => cell(r, c).classList.add('conflict'));
+    setMsg('Not solvable: the highlighted clues repeat a digit in a row, column, or box.', 'error');
+    return;
+  }
+  const clues = board.flat().filter(Boolean).length;
+  if (clues < 17) {
+    setMsg(`Not enough information: ${clues} clues given, a unique solution needs at least 17.`, 'error');
+    return;
+  }
+  setMsg('Solving…');
+  setTimeout(() => {
+    const res = solve(board, 2);
+    if (res.count === 0) setMsg('Not solvable: no digit assignment satisfies these clues.', 'error');
+    else if (res.count > 1) setMsg('Not enough information: these clues allow more than one solution. Add more clues.', 'error');
+    else { render(res.solution); setMsg('Solved.', 'ok'); }
+  }, 20);
+});
+
+render();
+</script>
+</body>
+</html>

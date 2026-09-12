@@ -4,6 +4,7 @@
 <meta charset="utf-8">
 <meta name="viewport" content="width=device-width, initial-scale=1">
 <title>Sudoku Solver</title>
+<script src="https://cdn.jsdelivr.net/npm/tesseract.js@5/dist/tesseract.min.js"></script>
 <style>
   :root {
     --ink: #1c2733; --muted: #66768a; --line: #9aa7b5; --thick: #1c2733;
@@ -42,6 +43,11 @@
   .msg.error { color: var(--err); font-weight: 600; }
   .msg.ok { color: var(--solved); font-weight: 600; }
   .hint { color: var(--muted); font-size: .82rem; line-height: 1.4; }
+  .drop { border: 2px dashed #9aa7b5; border-radius: 10px; padding: 12px 10px; text-align: center; cursor: pointer;
+          font-size: .85rem; color: var(--muted); background: #fbfcfe; }
+  .drop.over { border-color: var(--btn); background: #eef3fb; }
+  .drop b { color: var(--ink); }
+  .cell.unsure { color: #b8860b; }
   .foot { text-align: center; color: var(--muted); font-size: .8rem; margin-top: 26px; }
   .foot a { color: var(--btn); }
   @media (max-width: 720px) {
@@ -67,6 +73,12 @@
       Arrow keys move between cells; Backspace clears.</div>
     <button id="example">Load example</button>
     <button id="clear">Clear grid</button>
+    <div class="drop" id="drop">
+      <b>Read from a picture</b><br>
+      <span>click to choose a screenshot or photo of a Sudoku, or drag one here</span>
+      <input id="file" type="file" accept="image/*" hidden>
+    </div>
+    <div class="hint" id="ocrhint">Works best with a clear, straight-on screenshot. The digits it reads go into Edit mode so you can check them before solving.</div>
   </div>
 
   <div class="grid" id="grid" tabindex="0" aria-label="Sudoku grid"></div>
@@ -263,6 +275,96 @@ solveBtn.addEventListener('click', () => {
     else { render(res.solution); setMsg('Solved.', 'ok'); }
   }, 20);
 });
+
+// ---------------------------------------------------------------- read a picture
+// 1. draw the image on a canvas, threshold to dark/light
+// 2. find the grid: rows and columns that contain a long dark run are grid lines;
+//    their extent is the bounding box of the grid
+// 3. split into 9x9, call a cell empty if its centre has almost no ink
+// 4. OCR the non-empty cells with Tesseract (digits 1-9 only), then hand the
+//    grid to Edit mode for the user to check
+const drop = document.getElementById('drop'), fileIn = document.getElementById('file');
+drop.addEventListener('click', () => fileIn.click());
+fileIn.addEventListener('change', () => { if (fileIn.files[0]) readPicture(fileIn.files[0]); fileIn.value = ''; });
+for (const ev of ['dragenter', 'dragover']) drop.addEventListener(ev, e => { e.preventDefault(); drop.classList.add('over'); });
+for (const ev of ['dragleave', 'drop']) drop.addEventListener(ev, e => { e.preventDefault(); drop.classList.remove('over'); });
+drop.addEventListener('drop', e => { const f = e.dataTransfer.files[0]; if (f && f.type.startsWith('image/')) readPicture(f); });
+grid.addEventListener('dragover', e => e.preventDefault());
+grid.addEventListener('drop', e => { e.preventDefault(); const f = e.dataTransfer.files[0]; if (f && f.type.startsWith('image/')) readPicture(f); });
+
+function longRuns(dark, w, h, byRow, frac) {
+  const out = [], n = byRow ? w : h, m = byRow ? h : w;
+  for (let i = 0; i < m; i++) {
+    let best = 0, run = 0;
+    for (let j = 0; j < n; j++) {
+      const v = byRow ? dark[i * w + j] : dark[j * w + i];
+      run = v ? run + 1 : 0; if (run > best) best = run;
+    }
+    if (best >= frac * n) out.push(i);
+  }
+  return out;
+}
+
+async function readPicture(file) {
+  if (typeof Tesseract === 'undefined') { setMsg('The text-recognition library did not load (no internet?).', 'error'); return; }
+  setMsg('Reading the picture…');
+  const img = new Image(); img.src = URL.createObjectURL(file);
+  await new Promise(r => { img.onload = r; });
+  const scale = Math.min(1, 1200 / Math.max(img.width, img.height));
+  const w = Math.round(img.width * scale), h = Math.round(img.height * scale);
+  const cv = document.createElement('canvas'); cv.width = w; cv.height = h;
+  const cx = cv.getContext('2d'); cx.drawImage(img, 0, 0, w, h);
+  const px = cx.getImageData(0, 0, w, h).data;
+  const gray = new Uint8Array(w * h); let sum = 0;
+  for (let i = 0; i < w * h; i++) { gray[i] = (px[4 * i] * 299 + px[4 * i + 1] * 587 + px[4 * i + 2] * 114) / 1000; sum += gray[i]; }
+  const thr = Math.min(140, sum / (w * h) * 0.7);              // dark = well below the average brightness
+  const dark = new Uint8Array(w * h); for (let i = 0; i < w * h; i++) dark[i] = gray[i] < thr ? 1 : 0;
+
+  // grid box from long dark runs (try a strict fraction first, then looser)
+  let rows = [], cols = [];
+  for (const frac of [0.5, 0.35, 0.25]) { rows = longRuns(dark, w, h, true, frac); cols = longRuns(dark, w, h, false, frac); if (rows.length >= 4 && cols.length >= 4) break; }
+  let top, bot, left, right;
+  if (rows.length >= 4 && cols.length >= 4) { top = rows[0]; bot = rows[rows.length - 1]; left = cols[0]; right = cols[cols.length - 1]; }
+  else { top = 0; bot = h - 1; left = 0; right = w - 1; setMsg('Could not find grid lines; assuming the picture is just the grid…'); }
+  if (right - left < 90 || bot - top < 90) { setMsg('The grid is too small in this picture. Try a closer screenshot.', 'error'); return; }
+
+  const cw = (right - left) / 9, ch = (bot - top) / 9;
+  const found = Array.from({length: 9}, () => Array(9).fill(0));
+  const unsure = [];
+  const worker = await Tesseract.createWorker('eng');
+  await worker.setParameters({tessedit_char_whitelist: '123456789', tessedit_pageseg_mode: '10'});
+  let done = 0, todo = 0;
+  const jobs = [];
+  for (let r = 0; r < 9; r++) for (let c = 0; c < 9; c++) {
+    const x0 = left + c * cw, y0 = top + r * ch;
+    // ink in the central 50 % of the cell decides empty vs. filled
+    let ink = 0, cnt = 0;
+    for (let y = Math.floor(y0 + .25 * ch); y < y0 + .75 * ch; y++) for (let x = Math.floor(x0 + .25 * cw); x < x0 + .75 * cw; x++) { ink += dark[y * w + x]; cnt++; }
+    if (ink / cnt < 0.03) continue;
+    todo++;
+    const cc = document.createElement('canvas'); cc.width = 96; cc.height = 96;
+    const c2 = cc.getContext('2d'); c2.fillStyle = '#fff'; c2.fillRect(0, 0, 96, 96);
+    // crop the inner 70 % of the cell (avoids the grid lines) and upscale
+    c2.drawImage(cv, x0 + .15 * cw, y0 + .15 * ch, .7 * cw, .7 * ch, 8, 8, 80, 80);
+    jobs.push([r, c, cc]);
+  }
+  for (const [r, c, cc] of jobs) {
+    const res = await worker.recognize(cc);
+    const t = (res.data.text || '').trim();
+    const d = /^[1-9]$/.test(t) ? +t : 0;
+    found[r][c] = d;
+    if (!d || res.data.confidence < 60) unsure.push([r, c]);
+    done++; setMsg(`Reading digits… ${done} / ${todo}`);
+  }
+  await worker.terminate();
+
+  board = found;
+  if (!editing) editBtn.click();
+  render();
+  for (const [r, c] of unsure) cell(r, c).classList.add('unsure');
+  const nClues = board.flat().filter(Boolean).length;
+  setMsg(`Read ${nClues} digits${unsure.length ? `; ${unsure.length} cell${unsure.length > 1 ? 's' : ''} in orange need a look` : ''}. Check the grid, press Done, then Solve.`, unsure.length ? 'error' : 'ok');
+}
 
 render();
 </script>

@@ -39,14 +39,20 @@
   .keypad { display: grid; grid-template-columns: repeat(3, 1fr); gap: 6px; }
   .keypad button { padding: 12px 0; font-size: 1.15rem; }
   .keypad .wide { grid-column: span 3; font-size: .95rem; }
-  .msg { min-height: 3.2em; font-size: .95rem; line-height: 1.35; }
+  .msg { font-size: .95rem; line-height: 1.35; }
+  .msg:empty { display: none; }
   .msg.error { color: var(--err); font-weight: 600; }
   .msg.ok { color: var(--solved); font-weight: 600; }
   .hint { color: var(--muted); font-size: .82rem; line-height: 1.4; }
-  .drop { border: 2px dashed #9aa7b5; border-radius: 10px; padding: 12px 10px; text-align: center; cursor: pointer;
-          font-size: .85rem; color: var(--muted); background: #fbfcfe; }
+  .overlay { display: none; position: fixed; inset: 0; background: rgba(28,39,51,.45); align-items: center; justify-content: center; z-index: 10; }
+  .overlay.show { display: flex; }
+  .modal { background: #fff; border-radius: 12px; padding: 22px; width: min(480px, 92vw); box-shadow: 0 8px 30px rgba(0,0,0,.25); }
+  .drop { border: 2px dashed #9aa7b5; border-radius: 10px; padding: 34px 14px; text-align: center; font-size: 1rem; color: var(--muted); background: #fbfcfe; }
   .drop.over { border-color: var(--btn); background: #eef3fb; }
-  .drop b { color: var(--ink); }
+  .drop b { color: var(--ink); font-size: 1.1rem; }
+  .drop a { color: var(--btn); font-weight: 600; }
+  .tips { color: var(--muted); font-size: .85rem; line-height: 1.45; margin-top: 14px; }
+  .modalbtns { text-align: right; margin-top: 14px; }
   .cell.unsure { color: #b8860b; }
   .foot { text-align: center; color: var(--muted); font-size: .8rem; margin-top: 26px; }
   .foot a { color: var(--btn); }
@@ -62,6 +68,7 @@
 
 <div class="layout">
   <div class="side">
+    <button id="upload">Upload a picture of the puzzle</button>
     <button id="edit" class="primary">Edit</button>
     <div class="keypad" id="keypad">
       <button data-k="1">1</button><button data-k="2">2</button><button data-k="3">3</button>
@@ -73,12 +80,7 @@
       Arrow keys move between cells; Backspace clears.</div>
     <button id="example">Load example</button>
     <button id="clear">Clear grid</button>
-    <div class="drop" id="drop">
-      <b>Read from a picture</b><br>
-      <span>click to choose a screenshot or photo of a Sudoku, or drag one here</span>
-      <input id="file" type="file" accept="image/*" hidden>
-    </div>
-    <div class="hint" id="ocrhint">Works best with a clear, straight-on screenshot. The digits it reads go into Edit mode so you can check them before solving.</div>
+    <input id="file" type="file" accept="image/*" hidden>
   </div>
 
   <div class="grid" id="grid" tabindex="0" aria-label="Sudoku grid"></div>
@@ -97,6 +99,27 @@
   footer a:hover { text-decoration:underline; }
   footer svg { width:16px; height:16px; vertical-align:-3px; margin-right:4px; }
 </style>
+<div class="overlay" id="overlay">
+  <div class="modal">
+    <div class="drop" id="drop">
+      <b>Drag your picture here</b><br>
+      <span>or <a href="#" id="pick">open it from a folder</a></span>
+    </div>
+    <div class="tips">
+      For the best result use a clear, straight-on screenshot or scan of the unsolved puzzle. Photos taken at an angle,
+      or with shadows across the grid, may be misread. Whatever is read goes into the grid in Edit mode, with uncertain
+      cells in orange, so you can correct it before solving. The picture never leaves your computer.
+    </div>
+    <div class="modalbtns"><button id="cancelUp">Cancel</button></div>
+  </div>
+</div>
+<div class="overlay" id="notice">
+  <div class="modal">
+    <div id="noticeText" style="font-size:1rem;line-height:1.45"></div>
+    <div class="modalbtns"><button id="noticeOk" class="primary">OK</button></div>
+  </div>
+</div>
+
 <footer>
   Written by <b>Aiden Azarnoush</b><br>
   <a href="https://github.com/aiden-azarnoush/sudoku_solver"><svg viewBox="0 0 16 16" fill="currentColor"><path d="M5.5 3 1 8l4.5 5 1-1L2.9 8l3.6-4zM10.5 3l-1 1L13.1 8l-3.6 4 1 1L15 8z"/></svg>source on GitHub</a>
@@ -283,14 +306,19 @@ solveBtn.addEventListener('click', () => {
 // 3. split into 9x9, call a cell empty if its centre has almost no ink
 // 4. OCR the non-empty cells with Tesseract (digits 1-9 only), then hand the
 //    grid to Edit mode for the user to check
-const drop = document.getElementById('drop'), fileIn = document.getElementById('file');
-drop.addEventListener('click', () => fileIn.click());
-fileIn.addEventListener('change', () => { if (fileIn.files[0]) readPicture(fileIn.files[0]); fileIn.value = ''; });
+const drop = document.getElementById('drop'), fileIn = document.getElementById('file'), overlay = document.getElementById('overlay');
+const notice = document.getElementById('notice');
+function showNotice(text) { document.getElementById('noticeText').textContent = text; notice.classList.add('show'); }
+document.getElementById('noticeOk').addEventListener('click', () => notice.classList.remove('show'));
+document.getElementById('upload').addEventListener('click', () => overlay.classList.add('show'));
+document.getElementById('cancelUp').addEventListener('click', () => overlay.classList.remove('show'));
+overlay.addEventListener('click', e => { if (e.target === overlay) overlay.classList.remove('show'); });
+document.getElementById('pick').addEventListener('click', e => { e.preventDefault(); fileIn.click(); });
+fileIn.addEventListener('change', () => { if (fileIn.files[0]) { overlay.classList.remove('show'); readPicture(fileIn.files[0]); } fileIn.value = ''; });
 for (const ev of ['dragenter', 'dragover']) drop.addEventListener(ev, e => { e.preventDefault(); drop.classList.add('over'); });
 for (const ev of ['dragleave', 'drop']) drop.addEventListener(ev, e => { e.preventDefault(); drop.classList.remove('over'); });
-drop.addEventListener('drop', e => { const f = e.dataTransfer.files[0]; if (f && f.type.startsWith('image/')) readPicture(f); });
-grid.addEventListener('dragover', e => e.preventDefault());
-grid.addEventListener('drop', e => { e.preventDefault(); const f = e.dataTransfer.files[0]; if (f && f.type.startsWith('image/')) readPicture(f); });
+drop.addEventListener('drop', e => { const f = e.dataTransfer.files[0]; overlay.classList.remove('show');
+  if (f && f.type.startsWith('image/')) readPicture(f); else showNotice('That file is not an image. Please drop a PNG or JPG picture of the puzzle.'); });
 
 function longRuns(dark, w, h, byRow, frac) {
   const out = [], n = byRow ? w : h, m = byRow ? h : w;
@@ -306,7 +334,7 @@ function longRuns(dark, w, h, byRow, frac) {
 }
 
 async function readPicture(file) {
-  if (typeof Tesseract === 'undefined') { setMsg('The text-recognition library did not load (no internet?).', 'error'); return; }
+  if (typeof Tesseract === 'undefined') { showNotice('The text-recognition library could not be loaded. Check your internet connection and try again.'); return; }
   setMsg('Reading the picture…');
   const img = new Image(); img.src = URL.createObjectURL(file);
   await new Promise(r => { img.onload = r; });
@@ -325,8 +353,8 @@ async function readPicture(file) {
   for (const frac of [0.5, 0.35, 0.25]) { rows = longRuns(dark, w, h, true, frac); cols = longRuns(dark, w, h, false, frac); if (rows.length >= 4 && cols.length >= 4) break; }
   let top, bot, left, right;
   if (rows.length >= 4 && cols.length >= 4) { top = rows[0]; bot = rows[rows.length - 1]; left = cols[0]; right = cols[cols.length - 1]; }
-  else { top = 0; bot = h - 1; left = 0; right = w - 1; setMsg('Could not find grid lines; assuming the picture is just the grid…'); }
-  if (right - left < 90 || bot - top < 90) { setMsg('The grid is too small in this picture. Try a closer screenshot.', 'error'); return; }
+  else { setMsg(''); showNotice('The grid could not be found in this picture. Use a clear, straight-on screenshot or scan where the Sudoku grid lines are visible.'); return; }
+  if (right - left < 90 || bot - top < 90) { setMsg(''); showNotice('The grid is too small in this picture to read. Try a closer screenshot.'); return; }
 
   const cw = (right - left) / 9, ch = (bot - top) / 9;
   const found = Array.from({length: 9}, () => Array(9).fill(0));
@@ -363,6 +391,7 @@ async function readPicture(file) {
   render();
   for (const [r, c] of unsure) cell(r, c).classList.add('unsure');
   const nClues = board.flat().filter(Boolean).length;
+  if (nClues === 0) { showNotice('No digits could be read from this picture. Use a clearer, straight-on screenshot or scan.'); if (editing) editBtn.click(); return; }
   setMsg(`Read ${nClues} digits${unsure.length ? `; ${unsure.length} cell${unsure.length > 1 ? 's' : ''} in orange need a look` : ''}. Check the grid, press Done, then Solve.`, unsure.length ? 'error' : 'ok');
 }
 
